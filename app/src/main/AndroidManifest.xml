@@ -4,6 +4,15 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- 添加相機特性要求 -->
+    <uses-feature android:name="android.hardware.camera" />
+    <uses-feature android:name="android.hardware.camera.autofocus" />
+
+    <!-- 針對 MTK 設備的兼容性設置 -->
+    <meta-data
+        android:name="com.mediatek.camera.feature.enabled"
+        android:value="false" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -14,6 +23,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MosquitoTracker"
         tools:targetApi="31">
+
+
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

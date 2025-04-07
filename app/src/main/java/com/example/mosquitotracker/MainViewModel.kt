@@ -73,19 +73,26 @@ fun detectMovingObjects(
 ): List<DetectedObject> {
     if (prevBitmap == null) return emptyList()
 
-    if (prevBitmap.width != currentBitmap.width || prevBitmap.height != currentBitmap.height) {
+    // 確保圖像尺寸相同
+    if (prevBitmap.width != currentBitmap.width ||
+        prevBitmap.height != currentBitmap.height) {
         return emptyList()
     }
 
-    val width = currentBitmap.width
-    val height = currentBitmap.height
+    // 縮小圖像以減少計算量
+    val scaledWidth = 320
+    val scaledHeight = (currentBitmap.height * (320f / currentBitmap.width)).toInt()
 
+    val prevScaled = Bitmap.createScaledBitmap(prevBitmap, scaledWidth, scaledHeight, false)
+    val currentScaled = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, false)
+
+    // 實際的物體檢測邏輯
     val diffPixels = mutableListOf<Pair<Int, Int>>()
 
-    for (x in 0 until width step 3) { // 取樣檢測，減少計算量
-        for (y in 0 until height step 3) {
-            val prevPixel = prevBitmap.getPixel(x, y)
-            val currentPixel = currentBitmap.getPixel(x, y)
+    for (x in 0 until scaledWidth step 3) { // 取樣檢測，減少計算量
+        for (y in 0 until scaledHeight step 3) {
+            val prevPixel = prevScaled.getPixel(x, y)
+            val currentPixel = currentScaled.getPixel(x, y)
 
             val prevR = Color.red(prevPixel)
             val prevG = Color.green(prevPixel)
@@ -129,7 +136,7 @@ fun detectMovingObjects(
                     if (dx == 0 && dy == 0) continue
                     val nx = x + dx
                     val ny = y + dy
-                    if (nx in 0 until width && ny in 0 until height) {
+                    if (nx in 0 until scaledWidth && ny in 0 until scaledHeight) {
                         val neighbor = Pair(nx, ny)
                         if (neighbor in diffPixels && neighbor !in visited) {
                             visited.add(neighbor)
@@ -158,6 +165,15 @@ fun detectMovingObjects(
             width = (maxX - minX).toFloat(),
             height = (maxY - minY).toFloat(),
             id = index
-        )
+        ).let { obj ->
+            // 將座標轉換回原始尺寸
+            DetectedObject(
+                centerX = obj.centerX * currentBitmap.width / scaledWidth,
+                centerY = obj.centerY * currentBitmap.height / scaledHeight,
+                width = obj.width * currentBitmap.width / scaledWidth,
+                height = obj.height * currentBitmap.height / scaledHeight,
+                id = obj.id
+            )
+        }
     }
 }

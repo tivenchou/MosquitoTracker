@@ -1,11 +1,17 @@
 package com.example.mosquitotracker
-
-import android.graphics.Bitmap
-import android.graphics.Matrix
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import android.util.Size
+import android.util.Log
+import android.view.Surface
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,83 +40,78 @@ fun CameraScreen(viewModel: MainViewModel) {
     val controller = remember {
         LifecycleCameraController(context).apply {
             setEnabledUseCases(
-                CameraController.IMAGE_ANALYSIS or
-                        CameraController.IMAGE_CAPTURE
+                CameraController.IMAGE_CAPTURE or
+                        CameraController.IMAGE_ANALYSIS
             )
+
+            // 使用後置攝像頭
+            cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            // 創建獨立的 Preview use case
+            val preview = Preview.Builder()
+                .setTargetRotation(Surface.ROTATION_0)
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .build()
+                )
+                .build()
+
+            // 設置目標旋轉
+            preview?.setTargetRotation(Surface.ROTATION_0)
+
+            // 設置分辨率選擇器
+            val resolutionSelector = ResolutionSelector.Builder()
+                .build()
+
         }
     }
 
     var prevBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
+    LaunchedEffect(controller) {
+        controller.bindToLifecycle(lifecycleOwner)
+    }
+
     LaunchedEffect(Unit) {
         controller.setImageAnalysisAnalyzer(
             ContextCompat.getMainExecutor(context),
             object : ImageAnalysis.Analyzer {
+                private var lastAnalyzedTimestamp = 0L
+
                 override fun analyze(image: ImageProxy) {
-                    val currentBitmap = image.toBitmap()
-
-                    if (prevBitmap != null) {
-                        val detectedObjects = detectMovingObjects(
-                            prevBitmap,
-                            currentBitmap,
-                            threshold = 30,
-                            minSize = 5
-                        )
-                        viewModel.updateDetectedObjects(detectedObjects)
+                    val currentTimestamp = System.currentTimeMillis()
+                    if (currentTimestamp - lastAnalyzedTimestamp < 200) {
+                        image.close()
+                        return
                     }
+                    lastAnalyzedTimestamp = currentTimestamp
 
-                    prevBitmap = currentBitmap
-                    image.close()
+                    try {
+                        val currentBitmap = image.toBitmap()
+                        if (prevBitmap != null) {
+                            val detectedObjects = detectMovingObjects(
+                                prevBitmap,
+                                currentBitmap,
+                                threshold = 30,
+                                minSize = 5
+                            )
+                            viewModel.updateDetectedObjects(detectedObjects)
+                        }
+                        prevBitmap = currentBitmap
+                    } catch (e: Exception) {
+                        Log.e("CameraAnalysis", "Analysis error", e)
+                    } finally {
+                        image.close()
+                    }
                 }
             }
         )
     }
 
-    LaunchedEffect(lifecycleOwner) {
-        controller.bindToLifecycle(lifecycleOwner)
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
         CameraPreview(controller = controller, modifier = Modifier.fillMaxSize())
 
-        val objectToTrack = viewModel.getObjectToTrack()
-
-        if (objectToTrack != null) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val centerX = objectToTrack.centerX * size.width / 1000f
-                val centerY = objectToTrack.centerY * size.height / 1000f
-
-                // 繪製十字標線
-                val crossSize = 30.dp.toPx()
-
-                // 水平線
-                drawLine(
-                    color = Color.Red,
-                    start = Offset(centerX - crossSize, centerY),
-                    end = Offset(centerX + crossSize, centerY),
-                    strokeWidth = 2.dp.toPx()
-                )
-
-                // 垂直線
-                drawLine(
-                    color = Color.Red,
-                    start = Offset(centerX, centerY - crossSize),
-                    end = Offset(centerX, centerY + crossSize),
-                    strokeWidth = 2.dp.toPx()
-                )
-
-                // 繪製邊界框
-                val width = objectToTrack.width * size.width / 1000f
-                val height = objectToTrack.height * size.height / 1000f
-
-                drawRect(
-                    color = Color.Red,
-                    topLeft = Offset(centerX - width/2, centerY - height/2),
-                    size = androidx.compose.ui.geometry.Size(width, height),
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
-        }
+        // 其他UI元素...
     }
 }
 
