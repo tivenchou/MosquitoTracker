@@ -2,18 +2,19 @@ package com.example.mosquitotracker
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.Matrix
-import android.graphics.RectF
+import androidx.camera.core.ImageProxy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
-import kotlin.math.pow
+import kotlin.math.min
 import kotlin.math.sqrt
 
 data class DetectedObject(
@@ -34,6 +35,21 @@ class MainViewModel : ViewModel() {
         private set
 
     private var trackingJob: Job? = null
+    var lastBitmap: Bitmap? = null
+        private set
+
+    fun processImage(image: ImageProxy) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val bitmap = image.toOptimizedBitmap()
+            bitmap?.let {
+                val detected = detectMovingObjects(lastBitmap, it)
+                withContext(Dispatchers.Main) {
+                    updateDetectedObjects(detected)
+                }
+                lastBitmap = it
+            }
+        }
+    }
 
     fun updateDetectedObjects(newObjects: List<DetectedObject>) {
         detectedObjects = newObjects.sortedBy { it.area() }
@@ -50,130 +66,113 @@ class MainViewModel : ViewModel() {
         trackingJob?.cancel()
         trackingJob = viewModelScope.launch {
             while (detectedObjects.size > 1) {
-                delay(5000) // 5秒切換一次
+                delay(5000) // 5秒切换一次
                 currentTrackingIndex = (currentTrackingIndex + 1) % detectedObjects.size
             }
         }
     }
 
     fun getObjectToTrack(): DetectedObject? {
-        return if (detectedObjects.isNotEmpty()) {
-            detectedObjects[currentTrackingIndex % detectedObjects.size]
-        } else {
-            null
-        }
+        return detectedObjects.getOrNull(currentTrackingIndex)
     }
 }
 
+// 优化的物体检测函数
 fun detectMovingObjects(
     prevBitmap: Bitmap?,
     currentBitmap: Bitmap,
-    threshold: Int = 30,
-    minSize: Int = 10
+    threshold: Int = 25,
+    minSize: Int = 50
 ): List<DetectedObject> {
     if (prevBitmap == null) return emptyList()
 
-    // 確保圖像尺寸相同
-    if (prevBitmap.width != currentBitmap.width ||
-        prevBitmap.height != currentBitmap.height) {
-        return emptyList()
+    return try {
+        // 使用缩小后的图像检测
+        val scale = 0.25f
+        val scaledWidth = (currentBitmap.width * scale).toInt()
+        val scaledHeight = (currentBitmap.height * scale).toInt()
+
+        val prevScaled = Bitmap.createScaledBitmap(prevBitmap, scaledWidth, scaledHeight, false)
+        val currScaled = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, false)
+
+        val diffPoints = detectDiffPoints(prevScaled, currScaled, threshold)
+        groupDiffPoints(diffPoints, minSize)
+            .map { rect ->
+                // 转换回原始坐标
+                DetectedObject(
+                    centerX = rect.centerX() / scale,
+                    centerY = rect.centerY() / scale,
+                    width = rect.width() / scale,
+                    height = rect.height() / scale,
+                    id = rect.hashCode()
+                )
+            }
+    } catch (e: Exception) {
+        emptyList()
     }
+}
 
-    // 縮小圖像以減少計算量
-    val scaledWidth = 320
-    val scaledHeight = (currentBitmap.height * (320f / currentBitmap.width)).toInt()
+private fun detectDiffPoints(b1: Bitmap, b2: Bitmap, threshold: Int): List<Pair<Int, Int>> {
+    val points = mutableListOf<Pair<Int, Int>>()
+    val width = min(b1.width, b2.width)
+    val height = min(b1.height, b2.height)
 
-    val prevScaled = Bitmap.createScaledBitmap(prevBitmap, scaledWidth, scaledHeight, false)
-    val currentScaled = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, false)
-
-    // 實際的物體檢測邏輯
-    val diffPixels = mutableListOf<Pair<Int, Int>>()
-
-    for (x in 0 until scaledWidth step 3) { // 取樣檢測，減少計算量
-        for (y in 0 until scaledHeight step 3) {
-            val prevPixel = prevScaled.getPixel(x, y)
-            val currentPixel = currentScaled.getPixel(x, y)
-
-            val prevR = Color.red(prevPixel)
-            val prevG = Color.green(prevPixel)
-            val prevB = Color.blue(prevPixel)
-
-            val currentR = Color.red(currentPixel)
-            val currentG = Color.green(currentPixel)
-            val currentB = Color.blue(currentPixel)
-
-            val diff = sqrt(
-                (prevR - currentR).toDouble().pow(2) +
-                        (prevG - currentG).toDouble().pow(2) +
-                        (prevB - currentB).toDouble().pow(2)
-            )
-
-            if (diff > threshold) {
-                diffPixels.add(Pair(x, y))
+    for (x in 0 until width step 2) {  // 跳步采样
+        for (y in 0 until height step 2) {
+            if (isDifferent(b1.getPixel(x,y), b2.getPixel(x,y), threshold)) {
+                points.add(Pair(x, y))
             }
         }
     }
+    return points
+}
 
-    // 分組相近的像素點
+private fun isDifferent(c1: Int, c2: Int, threshold: Int): Boolean {
+    val diffR = abs(Color.red(c1) - Color.red(c2))
+    val diffG = abs(Color.green(c1) - Color.green(c2))
+    val diffB = abs(Color.blue(c1) - Color.blue(c2))
+    return sqrt((diffR*diffR + diffG*diffG + diffB*diffB).toDouble()) > threshold
+}
+
+private fun groupDiffPoints(points: List<Pair<Int, Int>>, minArea: Int): List<android.graphics.Rect> {
     val groups = mutableListOf<MutableList<Pair<Int, Int>>>()
     val visited = mutableSetOf<Pair<Int, Int>>()
 
-    for (pixel in diffPixels) {
-        if (pixel in visited) continue
+    for (point in points) {
+        if (point in visited) continue
 
         val queue = ArrayDeque<Pair<Int, Int>>()
         val group = mutableListOf<Pair<Int, Int>>()
-        queue.add(pixel)
-        visited.add(pixel)
+        queue.add(point)
+        visited.add(point)
 
         while (queue.isNotEmpty()) {
             val (x, y) = queue.removeFirst()
             group.add(Pair(x, y))
 
-            // 檢查相鄰像素
-            for (dx in -3..3) {
-                for (dy in -3..3) {
+            // 检查相邻像素
+            for (dx in -2..2) {
+                for (dy in -2..2) {
                     if (dx == 0 && dy == 0) continue
-                    val nx = x + dx
-                    val ny = y + dy
-                    if (nx in 0 until scaledWidth && ny in 0 until scaledHeight) {
-                        val neighbor = Pair(nx, ny)
-                        if (neighbor in diffPixels && neighbor !in visited) {
-                            visited.add(neighbor)
-                            queue.add(neighbor)
-                        }
+                    val neighbor = Pair(x + dx, y + dy)
+                    if (neighbor in points && neighbor !in visited) {
+                        visited.add(neighbor)
+                        queue.add(neighbor)
                     }
                 }
             }
         }
 
-        if (group.size >= minSize) {
+        if (group.size >= minArea) {
             groups.add(group)
         }
     }
 
-    // 計算每個群組的邊界框
-    return groups.mapIndexed { index, group ->
+    return groups.map { group ->
         val minX = group.minOf { it.first }
         val maxX = group.maxOf { it.first }
         val minY = group.minOf { it.second }
         val maxY = group.maxOf { it.second }
-
-        DetectedObject(
-            centerX = (minX + maxX) / 2f,
-            centerY = (minY + maxY) / 2f,
-            width = (maxX - minX).toFloat(),
-            height = (maxY - minY).toFloat(),
-            id = index
-        ).let { obj ->
-            // 將座標轉換回原始尺寸
-            DetectedObject(
-                centerX = obj.centerX * currentBitmap.width / scaledWidth,
-                centerY = obj.centerY * currentBitmap.height / scaledHeight,
-                width = obj.width * currentBitmap.width / scaledWidth,
-                height = obj.height * currentBitmap.height / scaledHeight,
-                id = obj.id
-            )
-        }
+        android.graphics.Rect(minX, minY, maxX, maxY)
     }
 }

@@ -1,106 +1,94 @@
 package com.example.mosquitotracker
+
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.util.Log
+import android.util.Size
+import android.view.Surface
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
+import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
-import android.util.Size
-import android.util.Log
-import android.view.Surface
-import android.graphics.Bitmap
-import android.graphics.Matrix
-import androidx.compose.foundation.Canvas
+import androidx.camera.view.CameraController
+import androidx.camera.view.LifecycleCameraController
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.*
-//import java.nio.ByteBuffer
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
+import kotlin.math.min
 
 @Composable
 fun CameraScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // 使用单线程执行器处理图像分析
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
     val controller = remember {
         LifecycleCameraController(context).apply {
+            // 设置分辨率选择器（降低分辨率提升性能）
+            val resolutionSelector = ResolutionSelector.Builder()
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(640, 480),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER
+                    )
+                )
+                .build()
+
+            // 配置预览用例
+
+
+            // 启用必要的用例
             setEnabledUseCases(
                 CameraController.IMAGE_CAPTURE or
                         CameraController.IMAGE_ANALYSIS
             )
 
-            // 使用後置攝像頭
+            // 设置后置摄像头
             cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-            // 創建獨立的 Preview use case
-            val preview = Preview.Builder()
-                .setTargetRotation(Surface.ROTATION_0)
-                .setResolutionSelector(
-                    ResolutionSelector.Builder()
-                        .build()
-                )
-                .build()
-
-            // 設置目標旋轉
-            preview?.setTargetRotation(Surface.ROTATION_0)
-
-            // 設置分辨率選擇器
-            val resolutionSelector = ResolutionSelector.Builder()
-                .build()
-
         }
     }
 
-    var prevBitmap by remember { mutableStateOf<Bitmap?>(null) }
-
+    // 绑定生命周期
     LaunchedEffect(controller) {
         controller.bindToLifecycle(lifecycleOwner)
     }
 
+    // 配置图像分析器
     LaunchedEffect(Unit) {
         controller.setImageAnalysisAnalyzer(
-            ContextCompat.getMainExecutor(context),
+            analysisExecutor,
             object : ImageAnalysis.Analyzer {
-                private var lastAnalyzedTimestamp = 0L
+                private var lastFrameTime = 0L
+                private val frameInterval = 200L // 控制帧率
 
                 override fun analyze(image: ImageProxy) {
-                    val currentTimestamp = System.currentTimeMillis()
-                    if (currentTimestamp - lastAnalyzedTimestamp < 200) {
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastFrameTime < frameInterval) {
                         image.close()
                         return
                     }
-                    lastAnalyzedTimestamp = currentTimestamp
+                    lastFrameTime = currentTime
 
                     try {
-                        val currentBitmap = image.toBitmap()
-                        if (prevBitmap != null) {
-                            val detectedObjects = detectMovingObjects(
-                                prevBitmap,
-                                currentBitmap,
-                                threshold = 30,
-                                minSize = 5
-                            )
-                            viewModel.updateDetectedObjects(detectedObjects)
-                        }
-                        prevBitmap = currentBitmap
+                        // 在后台处理图像
+                        viewModel.processImage(image)
                     } catch (e: Exception) {
-                        Log.e("CameraAnalysis", "Analysis error", e)
-                    } finally {
+                        Log.e("CameraAnalysis", "Error processing image", e)
                         image.close()
                     }
                 }
@@ -108,36 +96,44 @@ fun CameraScreen(viewModel: MainViewModel) {
         )
     }
 
+
+
     Box(modifier = Modifier.fillMaxSize()) {
         CameraPreview(controller = controller, modifier = Modifier.fillMaxSize())
-
-        // 其他UI元素...
     }
 }
 
-private fun ImageProxy.toBitmap(): Bitmap {
-    val yBuffer = planes[0].buffer // Y
-    val uBuffer = planes[1].buffer // U
-    val vBuffer = planes[2].buffer // V
+// 优化的Bitmap转换扩展函数
+fun ImageProxy.toOptimizedBitmap(): Bitmap? {
+    val yBuffer = planes[0].buffer
+    val uvBuffer = planes[2].buffer // NV21格式中V数据在planes[2]
 
-    val ySize = yBuffer.remaining()
-    val uSize = uBuffer.remaining()
-    val vSize = vBuffer.remaining()
+    return try {
+        val ySize = yBuffer.remaining()
+        val uvSize = uvBuffer.remaining()
 
-    val nv21 = ByteArray(ySize + uSize + vSize)
+        // 分配NV21格式数据
+        val nv21 = ByteArray(ySize + uvSize)
+        yBuffer.get(nv21, 0, ySize)
+        uvBuffer.get(nv21, ySize, uvSize)
 
-    yBuffer.get(nv21, 0, ySize)
-    vBuffer.get(nv21, ySize, vSize)
-    uBuffer.get(nv21, ySize + vSize, uSize)
+        val yuvImage = YuvImage(
+            nv21, ImageFormat.NV21,
+            this.width, this.height, null
+        )
 
-    val yuvImage = android.graphics.YuvImage(
-        nv21, android.graphics.ImageFormat.NV21, this.width, this.height, null
-    )
-
-    val outputStream = java.io.ByteArrayOutputStream()
-    yuvImage.compressToJpeg(
-        android.graphics.Rect(0, 0, this.width, this.height), 100, outputStream
-    )
-    val jpegArray = outputStream.toByteArray()
-    return android.graphics.BitmapFactory.decodeByteArray(jpegArray, 0, jpegArray.size)
+        ByteArrayOutputStream().use { output ->
+            yuvImage.compressToJpeg(
+                Rect(0, 0, width, height),
+                70, // 降低质量提升速度
+                output
+            )
+            BitmapFactory.decodeByteArray(output.toByteArray(), 0, output.size())
+        }
+    } catch (e: Exception) {
+        Log.e("ImageProxy", "Error converting to bitmap", e)
+        null
+    } finally {
+        close()
+    }
 }
