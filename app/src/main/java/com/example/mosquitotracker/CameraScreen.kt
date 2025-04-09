@@ -7,7 +7,6 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.util.Log
 import android.util.Size
-import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -22,9 +21,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.min
@@ -33,13 +32,16 @@ import kotlin.math.min
 fun CameraScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp
+    val screenHeight = configuration.screenHeightDp
 
-    // 使用单线程执行器处理图像分析
+    // 使用單線程執行器處理圖像分析
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
 
     val controller = remember {
         LifecycleCameraController(context).apply {
-            // 设置分辨率选择器（降低分辨率提升性能）
+            // 設置分辨率選擇器（降低分辨率提升性能）
             val resolutionSelector = ResolutionSelector.Builder()
                 .setResolutionStrategy(
                     ResolutionStrategy(
@@ -49,43 +51,45 @@ fun CameraScreen(viewModel: MainViewModel) {
                 )
                 .build()
 
-            // 配置预览用例
-
-
-            // 启用必要的用例
+            // 啟用必要的用例
             setEnabledUseCases(
                 CameraController.IMAGE_CAPTURE or
                         CameraController.IMAGE_ANALYSIS
             )
 
-            // 设置后置摄像头
+            // 設置後置攝像頭
             cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
         }
     }
 
-    // 绑定生命周期
+    // 綁定生命週期
     LaunchedEffect(controller) {
         controller.bindToLifecycle(lifecycleOwner)
     }
 
-    // 配置图像分析器
+    // 更新相機位置以跟蹤物體
+    LaunchedEffect(viewModel.currentTrackingIndex, viewModel.detectedObjects) {
+        viewModel.getObjectToTrack()?.let { target ->
+            viewModel.updateCameraPosition(target, screenWidth, screenHeight)
+        }
+    }
+
+    // 配置圖像分析器 (30 FPS)
     LaunchedEffect(Unit) {
         controller.setImageAnalysisAnalyzer(
             analysisExecutor,
             object : ImageAnalysis.Analyzer {
                 private var lastFrameTime = 0L
-                private val frameInterval = 200L // 控制帧率
 
                 override fun analyze(image: ImageProxy) {
                     val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastFrameTime < frameInterval) {
+                    if (currentTime - lastFrameTime < 33) { // ~30 FPS (1000ms/30 ≈ 33ms)
                         image.close()
                         return
                     }
                     lastFrameTime = currentTime
 
                     try {
-                        // 在后台处理图像
                         viewModel.processImage(image)
                     } catch (e: Exception) {
                         Log.e("CameraAnalysis", "Error processing image", e)
@@ -95,8 +99,6 @@ fun CameraScreen(viewModel: MainViewModel) {
             }
         )
     }
-
-
 
     Box(modifier = Modifier.fillMaxSize()) {
         CameraPreview(controller = controller, modifier = Modifier.fillMaxSize())

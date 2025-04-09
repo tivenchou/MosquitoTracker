@@ -34,6 +34,9 @@ class MainViewModel : ViewModel() {
     var currentTrackingIndex by mutableStateOf(0)
         private set
 
+    var cameraShouldFollow by mutableStateOf(true)
+    var currentTrackedPosition by mutableStateOf<Pair<Float, Float>?>(null)
+
     private var trackingJob: Job? = null
     var lastBitmap: Bitmap? = null
         private set
@@ -52,21 +55,23 @@ class MainViewModel : ViewModel() {
     }
 
     fun updateDetectedObjects(newObjects: List<DetectedObject>) {
-        detectedObjects = newObjects.sortedBy { it.area() }
+        // 由小到大排序，只取前2個最小的物體
+        detectedObjects = newObjects.sortedBy { it.area() }.take(2)
 
-        if (trackingJob?.isActive != true && detectedObjects.size > 1) {
+        if (trackingJob?.isActive != true && detectedObjects.isNotEmpty()) {
             startTrackingCycle()
-        } else if (detectedObjects.size <= 1) {
+        } else if (detectedObjects.isEmpty()) {
             trackingJob?.cancel()
             currentTrackingIndex = 0
+            currentTrackedPosition = null
         }
     }
 
     private fun startTrackingCycle() {
         trackingJob?.cancel()
         trackingJob = viewModelScope.launch {
-            while (detectedObjects.size > 1) {
-                delay(5000) // 5秒切换一次
+            while (detectedObjects.isNotEmpty()) {
+                delay(5000) // 5秒切換一次
                 currentTrackingIndex = (currentTrackingIndex + 1) % detectedObjects.size
             }
         }
@@ -74,6 +79,21 @@ class MainViewModel : ViewModel() {
 
     fun getObjectToTrack(): DetectedObject? {
         return detectedObjects.getOrNull(currentTrackingIndex)
+    }
+
+    fun updateCameraPosition(target: DetectedObject, screenWidth: Int, screenHeight: Int) {
+        if (!cameraShouldFollow) return
+
+        // 計算物體偏離中心的程度 (標準化坐標 -1到1)
+        val normX = (target.centerX / screenWidth) * 2 - 1
+        val normY = (target.centerY / screenHeight) * 2 - 1
+
+        // 只跟蹤偏離中心較遠的物體 (閾值0.3)
+        if (abs(normX) > 0.3 || abs(normY) > 0.3) {
+            currentTrackedPosition = Pair(normX, normY)
+        } else {
+            currentTrackedPosition = null
+        }
     }
 }
 
@@ -150,7 +170,7 @@ private fun groupDiffPoints(points: List<Pair<Int, Int>>, minArea: Int): List<an
             val (x, y) = queue.removeFirst()
             group.add(Pair(x, y))
 
-            // 检查相邻像素
+            // 檢查相鄰像素
             for (dx in -2..2) {
                 for (dy in -2..2) {
                     if (dx == 0 && dy == 0) continue
