@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,16 +44,41 @@ class MainViewModel : ViewModel() {
 
     fun processImage(image: ImageProxy) {
         viewModelScope.launch(Dispatchers.IO) {
-            val bitmap = image.toOptimizedBitmap()
-            bitmap?.let {
-                val detected = detectMovingObjects(lastBitmap, it)
-                withContext(Dispatchers.Main) {
-                    updateDetectedObjects(detected)
+            val bitmap = try {
+                // 移除 setConfig 直接使用原始 bitmap
+                image.toOptimizedBitmap()?.also { originalBitmap ->
+                    // 創建可修改的副本（如果需要改變配置）
+                    if (originalBitmap.config != Bitmap.Config.RGB_565) {
+                        originalBitmap.copy(Bitmap.Config.RGB_565, false)?.also {
+                            originalBitmap.recycle() // 回收原始位圖
+                        }
+                    } else {
+                        originalBitmap
+                    }
                 }
-                lastBitmap = it
+            } catch (e: Exception) {
+                Log.e("Bitmap", "Error processing bitmap", e)
+                null
+            } finally {
+                image.close()
+            }
+
+            bitmap?.let {
+                try {
+                    val detected = detectMovingObjects(lastBitmap, it)
+                    withContext(Dispatchers.Main) {
+                        updateDetectedObjects(detected)
+                    }
+                    lastBitmap?.recycle() // 確保回收舊位圖
+                    lastBitmap = it
+                } catch (e: Exception) {
+                    it.recycle() // 處理失敗時回收位圖
+                    Log.e("Detection", "Object detection failed", e)
+                }
             }
         }
     }
+
 
     fun updateDetectedObjects(newObjects: List<DetectedObject>) {
         // 由小到大排序，只取前2個最小的物體
@@ -116,6 +142,8 @@ fun detectMovingObjects(
         val currScaled = Bitmap.createScaledBitmap(currentBitmap, scaledWidth, scaledHeight, false)
 
         val diffPoints = detectDiffPoints(prevScaled, currScaled, threshold)
+        prevScaled.recycle() // 確保釋放資源
+        currScaled.recycle()
         groupDiffPoints(diffPoints, minSize)
             .map { rect ->
                 // 转换回原始坐标

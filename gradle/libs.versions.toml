@@ -11,6 +11,7 @@ activityCompose = "1.8.2"
 junit = "4.13.2"
 extJunit = "1.2.1"
 espresso = "3.6.1"
+media3CommonKtx = "1.6.0"
 
 [libraries]
 # Core
@@ -41,6 +42,7 @@ accompanist-permissions = { group = "com.google.accompanist", name = "accompanis
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "extJunit" }
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
+androidx-media3-common-ktx = { group = "androidx.media3", name = "media3-common-ktx", version.ref = "media3CommonKtx" }
 
 
 [plugins]

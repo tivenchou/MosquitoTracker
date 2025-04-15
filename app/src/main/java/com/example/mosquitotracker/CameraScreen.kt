@@ -24,9 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import kotlin.math.min
+import android.os.SystemClock
+import androidx.compose.runtime.DisposableEffect
 
 @Composable
 fun CameraScreen(viewModel: MainViewModel) {
@@ -65,6 +67,7 @@ fun CameraScreen(viewModel: MainViewModel) {
     // 綁定生命週期
     LaunchedEffect(controller) {
         controller.bindToLifecycle(lifecycleOwner)
+        delay(500) // 添加短暫延遲
     }
 
     // 更新相機位置以跟蹤物體
@@ -80,15 +83,16 @@ fun CameraScreen(viewModel: MainViewModel) {
             analysisExecutor,
             object : ImageAnalysis.Analyzer {
                 private var lastFrameTime = 0L
+                private val frameInterval = 66 // 15 FPS (1000ms/15)
 
                 override fun analyze(image: ImageProxy) {
-                    Log.d("Camera", "New frame received, format: ${image.format}, resolution: ${image.width}x${image.height}")
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastFrameTime < 33) { // ~30 FPS (1000ms/30 ≈ 33ms)
+                    val currentTime = SystemClock.elapsedRealtime()
+                    if (currentTime - lastFrameTime < frameInterval) {
                         image.close()
                         return
                     }
                     lastFrameTime = currentTime
+
 
                     try {
                         viewModel.processImage(image)
@@ -108,26 +112,32 @@ fun CameraScreen(viewModel: MainViewModel) {
             trackedPosition = viewModel.currentTrackedPosition
         )
     }
+    // 在 Composable 退出時釋放資源
+    DisposableEffect(Unit) {
+        onDispose {
+            controller.unbind() // 確保解除綁定
+            analysisExecutor.shutdown() // 關閉分析線程
+        }
+    }
 }
 
-// 优化的Bitmap转换扩展函数
 fun ImageProxy.toOptimizedBitmap(): Bitmap? {
     if (this.format != ImageFormat.YUV_420_888) {
-        Log.w("Camera", "Unsupported image format: ${this.format}. Expected YUV_420_888.")
-        this.close()
+        Log.w("Camera", "Unsupported image format: ${this.format}")
+        close()
         return null
     }
-    val yBuffer = planes[0].buffer
-    val uvBuffer = planes[2].buffer // NV21格式中V数据在planes[2]
 
     return try {
+        val yBuffer = planes[0].buffer
+        val uvBuffer = planes[2].buffer
         val ySize = yBuffer.remaining()
         val uvSize = uvBuffer.remaining()
 
-        // 分配NV21格式数据
-        val nv21 = ByteArray(ySize + uvSize)
-        yBuffer.get(nv21, 0, ySize)
-        uvBuffer.get(nv21, ySize, uvSize)
+        val nv21 = ByteArray(ySize + uvSize).apply {
+            yBuffer.get(this, 0, ySize)
+            uvBuffer.get(this, ySize, uvSize)
+        }
 
         val yuvImage = YuvImage(
             nv21, ImageFormat.NV21,
@@ -137,13 +147,20 @@ fun ImageProxy.toOptimizedBitmap(): Bitmap? {
         ByteArrayOutputStream().use { output ->
             yuvImage.compressToJpeg(
                 Rect(0, 0, width, height),
-                70, // 降低质量提升速度
+                70,
                 output
             )
-            BitmapFactory.decodeByteArray(output.toByteArray(), 0, output.size())
+            val bytes = output.toByteArray()
+
+            // 直接解碼為 RGB_565 格式
+            BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }.let { options ->
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            }
         }
     } catch (e: Exception) {
-        Log.e("ImageProxy", "Error converting to bitmap", e)
+        Log.e("ImageProxy", "Conversion error", e)
         null
     } finally {
         close()

@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.mosquitotracker"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.mosquitotracker"
@@ -74,6 +74,7 @@ dependencies {
 
     // Accompanist
     implementation(libs.accompanist.permissions)
+    implementation(libs.androidx.media3.common.ktx)
 
     // Testing
     testImplementation(libs.junit)

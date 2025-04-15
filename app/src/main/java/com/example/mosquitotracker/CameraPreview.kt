@@ -23,7 +23,7 @@ fun CameraPreview(
             factory = { context ->
                 PreviewView(context).apply {
                     this.controller = controller
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    scaleType = PreviewView.ScaleType.FIT_CENTER
                 }
             },
             modifier = Modifier.fillMaxSize()
