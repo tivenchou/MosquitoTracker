@@ -97,12 +97,12 @@ class MainViewModel : ViewModel() {
     }
 }
 
-// 优化的物体检测函数
+// 优化的物体检测函数 - 修改阈值以更好检测小黑点
 fun detectMovingObjects(
     prevBitmap: Bitmap?,
     currentBitmap: Bitmap,
-    threshold: Int = 25,
-    minSize: Int = 50
+    threshold: Int = 40,  // 提高阈值以更好检测黑色物体
+    minSize: Int = 20     // 减小最小尺寸以检测小蚊子
 ): List<DetectedObject> {
     if (prevBitmap == null) return emptyList()
 
@@ -148,10 +148,10 @@ private fun detectDiffPoints(b1: Bitmap, b2: Bitmap, threshold: Int): List<Pair<
 }
 
 private fun isDifferent(c1: Int, c2: Int, threshold: Int): Boolean {
-    val diffR = abs(Color.red(c1) - Color.red(c2))
-    val diffG = abs(Color.green(c1) - Color.green(c2))
-    val diffB = abs(Color.blue(c1) - Color.blue(c2))
-    return sqrt((diffR*diffR + diffG*diffG + diffB*diffB).toDouble()) > threshold
+    // 更关注亮度变化而不是颜色变化
+    val brightness1 = (Color.red(c1) + Color.green(c1) + Color.blue(c1)) / 3
+    val brightness2 = (Color.red(c2) + Color.green(c2) + Color.blue(c2)) / 3
+    return abs(brightness1 - brightness2) > threshold
 }
 
 private fun groupDiffPoints(points: List<Pair<Int, Int>>, minArea: Int): List<android.graphics.Rect> {

@@ -31,7 +31,7 @@ import kotlin.math.min
 @Composable
 fun CameraScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp
     val screenHeight = configuration.screenHeightDp
@@ -82,6 +82,7 @@ fun CameraScreen(viewModel: MainViewModel) {
                 private var lastFrameTime = 0L
 
                 override fun analyze(image: ImageProxy) {
+                    Log.d("Camera", "New frame received, format: ${image.format}, resolution: ${image.width}x${image.height}")
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastFrameTime < 33) { // ~30 FPS (1000ms/30 ≈ 33ms)
                         image.close()
@@ -101,12 +102,21 @@ fun CameraScreen(viewModel: MainViewModel) {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        CameraPreview(controller = controller, modifier = Modifier.fillMaxSize())
+        CameraPreview(
+            controller = controller,
+            modifier = Modifier.fillMaxSize(),
+            trackedPosition = viewModel.currentTrackedPosition
+        )
     }
 }
 
 // 优化的Bitmap转换扩展函数
 fun ImageProxy.toOptimizedBitmap(): Bitmap? {
+    if (this.format != ImageFormat.YUV_420_888) {
+        Log.w("Camera", "Unsupported image format: ${this.format}. Expected YUV_420_888.")
+        this.close()
+        return null
+    }
     val yBuffer = planes[0].buffer
     val uvBuffer = planes[2].buffer // NV21格式中V数据在planes[2]
 
